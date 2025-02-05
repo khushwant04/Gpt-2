@@ -1,8 +1,22 @@
+import os
 import math
+import time
+import inspect
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import wandb
+# -----------------------------------------------------------------------------
+# start a new wandb run to track this script
+wandb.init(
+    # set the wandb project where this run will be logged
+    project="gpt-2",
+)
+
+
+
+
 
 # -----------------------------------------------------------------------------
 
@@ -172,6 +186,30 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+    
+    def configure_optimizers(self, weight_decay, learning_rate, device_type):
+        # start with all of the candidate parameters (that require grad)
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        # Create AdamW optimizer and use the fused version if it is available
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_available and device_type == "cuda"
+        print(f"using fused AdamW: {use_fused}")
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+        return optimizer
 
 # -----------------------------------------------------------------------------
 import tiktoken
@@ -257,7 +295,7 @@ def get_lr(it):
 
 
 # Optimize!
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
+optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device_type=device)
 for step in range(max_steps):
     t0 = time.time()
     x, y = train_loader.next_batch()
@@ -276,6 +314,7 @@ for step in range(max_steps):
     dt = t1 - t0
     tokens_processed = train_loader.B * train_loader.T
     tokens_per_sec = tokens_processed / dt
+    wandb.log({"loss": loss, "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
     print(f"step {step:5d} | loss: {loss.item()}  | lr {lr:.4e} | norm:{norm:.4f} | time: {dt*1000:.2f}ms | tokens/sec: {tokens_per_sec:.0f}")
 
 import sys; sys.exit(0)
@@ -289,6 +328,8 @@ tokens = enc.encode("Hello, I'm a language model,")
 tokens = torch.tensor(tokens, dtype=torch.long) # (8,)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequence, 1) # (5, 8)
 x = tokens.to(device)
+
+model = GPT(GPTConfig()).to(device)
 
 # generate! right now x is (B, T) where B=5, T=8
 # set the seed to 42
