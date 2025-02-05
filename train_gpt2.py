@@ -266,6 +266,15 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
+
+total_batch_size = 524288
+B = 8 # MICRO BATCH SIZE
+T = 1024 # SEQUENCE LENGTH
+
+assert total_batch_size % (B * T) == 0, "total batch size must be divisible by B * T"
+grad_accum_steps = total_batch_size // (B * T)
+print(f"Total desired batch size: {total_batch_size:,}")
+print(f"Calculated gradient accumulation steps: {grad_accum_steps}")
 torch.set_float32_matmul_precision("high")
 train_loader = DataLoaderLite(B=8, T=1024)
 
@@ -298,12 +307,16 @@ def get_lr(it):
 optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device_type=device)
 for step in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    with torch.autocast(device_type=device, dtype=torch.bfloat16):
-        logits, loss = model(x, y)      
-    loss.backward()
+    loss_accum = 0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)      
+        loss = loss / grad_accum_steps    
+        loss_accum += loss.detach()
+        loss.backward()
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr = get_lr(step)
     for param_group in optimizer.param_groups:
@@ -314,8 +327,8 @@ for step in range(max_steps):
     dt = t1 - t0
     tokens_processed = train_loader.B * train_loader.T
     tokens_per_sec = tokens_processed / dt
-    wandb.log({"loss": loss, "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
-    print(f"step {step:5d} | loss: {loss.item()}  | lr {lr:.4e} | norm:{norm:.4f} | time: {dt*1000:.2f}ms | tokens/sec: {tokens_per_sec:.0f}")
+    wandb.log({"loss": f"{loss_accum.item():.6f}", "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
+    print(f"step {step:5d} | loss: {loss_accum.item():.6f}  | lr {lr:.4e} | norm:{norm:.4f} | time: {dt*1000:.2f}ms | tokens/sec: {tokens_per_sec:.0f}")
 
 import sys; sys.exit(0)
 
