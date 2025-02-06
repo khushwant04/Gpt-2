@@ -8,7 +8,7 @@ from tqdm import tqdm  # pip install tqdm
 local_dir = "edu_fineweb100M"
 remote_name = "sample-10BT"
 max_tokens = int(1e8)  # Tokens per shard; adjust as needed
-max_shards = 2       # Maximum number of shards to produce
+max_shards = 5     # Maximum number of shards to produce
 
 # Create the cache directory if it doesn't exist yet.
 DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir)
@@ -60,7 +60,8 @@ for doc in fw:
             progress_bar.update(remaining)
         # Write the current shard to file.
         all_tokens_np = np.concatenate(current_shard_tokens)
-        output_filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_shard_{shard_idx:03d}_tokens.npy")
+        split = "val" if shard_idx == 0 else "train"
+        output_filename = os.path.join(DATA_CACHE_DIR, f"edufineweb_{split}_{shard_idx:06d}.npy")
         write_datafile(output_filename, all_tokens_np)
         print(f"Finished! Wrote {current_token_count} tokens to {output_filename}")
         shard_idx += 1
