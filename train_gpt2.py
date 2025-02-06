@@ -327,10 +327,12 @@ train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp
 model = GPT(GPTConfig())
 print("did't crash yay!")   
 model.to(device) 
-model =  torch.compile(model)
+use_compile = True # torch.compile interferes with HellaSwag eval and Generation. TODO fix
+if use_compile:
+    model = torch.compile(model)
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
-
+raw_model = model.module if ddp else model # always contains the "raw" unwrapped model
 
 max_lr = 6e-4
 min_lr = max_lr * 0.1
@@ -351,7 +353,7 @@ def get_lr(it):
 
 
 # Optimize!
-optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device_type=device)
+optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device_type=device)
 for step in range(max_steps):
     t0 = time.time()
     optimizer.zero_grad()
@@ -379,7 +381,7 @@ for step in range(max_steps):
     tokens_processed = train_loader.B * train_loader.T * ddp_world_size
     tokens_per_sec = tokens_processed / dt
     if master_process:
-        wandb.log({"loss": f"{loss_accum.item():.6f}", "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
+        wandb.log({"loss":loss_accum, "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
         print(f"step {step:5d} | loss: {loss_accum.item():.6f}  | lr {lr:.4e} | norm:{norm:.4f} | time: {dt*1000:.2f}ms | tokens/sec: {tokens_per_sec:.0f}")
 if ddp:
     destroy_process_group()
