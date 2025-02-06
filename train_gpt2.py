@@ -380,8 +380,8 @@ for step in range(max_steps):
     dt = t1 - t0
     tokens_processed = train_loader.B * train_loader.T * ddp_world_size
     tokens_per_sec = tokens_processed / dt
-    if master_process:
-        wandb.log({"loss":loss_accum, "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})
+    if master_process:  
+        wandb.log({"loss":loss_accum, "lr": lr, "norm": norm, "tokens_per_sec": tokens_per_sec})   
         print(f"step {step:5d} | loss: {loss_accum.item():.6f}  | lr {lr:.4e} | norm:{norm:.4f} | time: {dt*1000:.2f}ms | tokens/sec: {tokens_per_sec:.0f}")
 if ddp:
     destroy_process_group()
